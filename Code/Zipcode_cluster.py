@@ -1,12 +1,15 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
 
-
+from __future__ import division
+from sklearn import preprocessing
 from sklearn.cluster import KMeans
 from scipy.spatial.distance import cdist
 from scipy.spatial.distance import euclidean
 from sklearn.metrics import silhouette_score
+from BootstrapCluster import BootstrapCluster
 
 def read_clean_data():
     '''
@@ -56,6 +59,18 @@ def get_X(df):
     X.set_index('Zipcode',inplace=True)
     return X
 
+def get_QX(df):
+    X = get_X(df)
+    XT = get_XT(X)
+    X = XT.resample('Q').astype(int).T
+    return X
+
+def get_pct_change(X):
+    XT = get_XT(X)
+    XX = XT.pct_change().T*100
+    XX = XX.ix[:,1:]
+    return XX
+
 def get_XT(X):
     '''
     Read dataframe
@@ -66,51 +81,66 @@ def get_XT(X):
     XT.index = pd.to_datetime(XT.index)
     return XT
 
-def assign_cluster(df,X,no_clusters):
+def assign_cluster(df,X,cluster_col,no_clusters):
     '''
     Read dataframe & X
     Apply Kmeans and add cluster labels to dataframe
     '''
     kmeans = KMeans(n_clusters=no_clusters,random_state=0)
     kmeans.fit(X)
-    df['Cluster'] = kmeans.labels_
+    df[cluster_col] = kmeans.labels_
     return df
 
-def plot_clusters(df,X,no_clusters):
+def plot_clusters(df,cluster_col,X,no_clusters,ylim=1):
     '''
     Plot Clustered Zipcodes and its housing price trend
     Each cluster is plotted in the subplot
     4 subplots in a row (ncols=4)
     '''
-    fig, ax = plt.subplots(nrows=6, ncols=4, figsize=(15, 12))
-    ncols = 4
+    if no_clusters % 4 == 0:
+        no_rows = no_clusters/4
+
+    else:
+        no_rows = (no_clusters//4) + 1
+    no_cols = 4
+    fig_wid = no_cols * 4
+    fig_ht = no_rows * 4
+
+    fig, ax = plt.subplots(nrows=no_rows, ncols=no_cols, figsize=(fig_wid, fig_ht))
     row = 0
     col = -1
     XT = get_XT(X)
 
     for cluster in range(no_clusters):
-        if col == ncols - 1:
+        if col == no_cols - 1:
             row = row+1
             col = 0
         else:
             col = col + 1
 
-        for zipcode in df[['Zipcode']][df.Cluster==cluster].values:
+        for zipcode in df[['Zipcode']][df[cluster_col]==cluster].values:
             zc = int(zipcode)
             ts = pd.Series(XT[zc])/1000000
-            ax[row,col].set_ylabel("(in millions)")
-            plt.setp(ax[row,col].get_xticklabels(), rotation=30, horizontalalignment='right')
-            ax[row,col].plot(ts)
+            if no_rows > 1:
+                ax[row,col].set_ylabel("(in millions)")
+                plt.setp(ax[row,col].get_xticklabels(), rotation=30, horizontalalignment='right')
+                ax[row,col].set_ylim(0, ylim)
+                ax[row,col].plot(ts)
+            else:
+                ax[col].set_ylabel("(in millions)")
+                plt.setp(ax[col].get_xticklabels(), rotation=30, horizontalalignment='right')
+                ax[col].set_ylim(0, ylim)
+                ax[col].plot(ts)
     plt.tight_layout()
 
-def plot_cluster(df,X,clusterid):
+def plot_cluster(df,cluster_col,X,clusterid):
     '''
     Plot the housing price data for all zipcodes
     in a particular cluster
     '''
     fig, ax = plt.subplots(nrows=1, ncols=1, figsize=(8, 6))
     XT = get_XT(X)
-    for zipcode,city,county in df[['Zipcode','City','CountyName']][df.Cluster==clusterid].values:
+    for zipcode,city,county in df[['Zipcode','City','CountyName']][df[cluster_col]==clusterid].values:
         zc = int(zipcode)
         ts = pd.Series(XT[zc])/1000000
         ax.set_ylabel("(in millions)")
@@ -172,16 +202,82 @@ def plot_wcss_silhouette_score(X,min_k, max_k):
 if __name__ == '__main__':
 
     df = read_clean_data()
-    X = get_X(df)
-    no_clusters = 22
-    df_cluster = assign_cluster(df,X,no_clusters)
-
-    #To plot all clusters
-    #plot_clusters(df_cluster,X,no_clusters)
-
-    #To plot single cluster
-    #clusterid = 0
-    #plot_cluster(df_cluster,X,clusterid)
+    #X = get_X(df)
+    X = get_QX(df)
 
     #To plot WCSS & Silhoutte score to determine Optimum value for K
     #plot_wcss_silhouette_score(X/1000000,15, 25)
+    #To plot all clusters
+    #plot_clusters(df,'Cluster',X,no_clusters)
+    #To plot single cluster
+    #plot_cluster(df,'Cluster',X,clusterid=0)
+
+    #Group1 : Housing prices <=500,000
+    X1 = X[(X.ix[:,0] <= 500000) & (X.ix[:,0] <= 500000)]
+    X1_pct = get_pct_change(X1)
+    df_X1 = pd.merge(X1,df.ix[:,0:5],how='inner', left_index=True, right_on = ['Zipcode'])
+
+    no_samples=1000
+    no_clusters = 4
+    df_X1 = assign_cluster(df_X1,X1,'Cluster',no_clusters)
+    #plot_clusters(df_X1,'Cluster',X1,no_clusters)
+    df_X1 = assign_cluster(df_X1,X1_pct,'ClusterPct',no_clusters)
+    #plot_clusters(df_X1,'ClusterPct',X1,no_clusters)
+    bc = BootstrapCluster(n_clusters=no_clusters,n_samples=no_samples)
+    bc.fit(X1)
+    df_X1['ClusterBS']=bc.labels
+    #plot_clusters(df_X1,'ClusterBS',X1,no_clusters)
+    bc.fit(X1_pct)
+    df_X1['ClusterPctBS']=bc.labels
+    #plot_clusters(df_X1,'ClusterPctBS',X1,no_clusters)
+
+    #Check the clustering between ClusterBS and ClusterPCTBS
+    #df_X1[['Zipcode','City','CountyName','ClusterBS','ClusterPctBS']][df_X1.ClusterBS==0]
+    #df_X1[['Zipcode','City','CountyName','ClusterBS','ClusterPctBS']][df_X1.ClusterBS==1]
+    #df_X1[['Zipcode','City','CountyName','ClusterBS','ClusterPctBS']][df_X1.ClusterBS==2]
+    #df_X1[['Zipcode','City','CountyName','ClusterBS','ClusterPctBS']][df_X1.ClusterBS==3]
+
+    ##Group2 : Housing prices > 500,000 and < 1,000,000
+    X2 = X[(X.ix[:,0] > 500000) & (X.ix[:,0] <= 1000000)]
+    X2_pct = get_pct_change(X2)
+    df_X2 = pd.merge(X2,df.ix[:,0:5],how='inner', left_index=True, right_on = ['Zipcode'])
+
+    no_samples=1000
+    no_clusters = 5
+    df_X2 = assign_cluster(df_X2,X2,'Cluster',no_clusters)
+    bc = BootstrapCluster(n_clusters=no_clusters,n_samples=no_samples)
+    bc.fit(X2)
+    df_X2['ClusterBS']=bc.labels
+
+    no_clusters = 4
+    df_X2 = assign_cluster(df_X2,X2_pct,'ClusterPct',no_clusters)
+    bc.fit(X2_pct)
+    df_X2['ClusterPctBS']=bc.labels
+
+    #Plotting Graphs
+    #plot_clusters(df_X2,'Cluster',X2,no_clusters)
+    #plot_clusters(df_X2,'ClusterBS',X2,no_clusters)
+    #plot_clusters(df_X2,'ClusterPct',X2,no_clusters)
+    #plot_clusters(df_X2,'ClusterPctBS',X2,no_clusters)
+
+    ##Group3 : Housing prices > 1,000,000 and < 2,000,000
+    X3 = X[(X.ix[:,0] > 1000000) & (X.ix[:,0] <= 2000000)]
+    X3_pct = get_pct_change(X3)
+    df_X3 = pd.merge(X3,df.ix[:,0:5],how='inner', left_index=True, right_on = ['Zipcode'])
+
+    no_samples=1000
+    no_clusters = 4
+    df_X3 = assign_cluster(df_X3,X3,'Cluster',no_clusters)
+    bc = BootstrapCluster(n_clusters=no_clusters,n_samples=no_samples)
+    bc.fit(X3)
+    df_X3['ClusterBS']=bc.labels
+
+    df_X3 = assign_cluster(df_X3,X3_pct,'ClusterPct',no_clusters)
+    bc.fit(X3_pct)
+    df_X3['ClusterPctBS']=bc.labels
+
+    #Plotting Graphs
+    #plot_clusters(df_X3,'Cluster',X3,no_clusters)
+    #plot_clusters(df_X3,'ClusterBS',X3,no_clusters)
+    #plot_clusters(df_X3,'ClusterPct',X3,no_clusters)
+    #plot_clusters(df_X3,'ClusterPctBS',X3,no_clusters)
