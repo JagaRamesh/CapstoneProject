@@ -1,6 +1,6 @@
 # Clustering Bay Area Cities on Housing Price
 
-(/images/page1.png)
+![page1](/images/page1.png)
 ### Objective :
 The objective of the project is to cluster bayarea zipcodes using time series data of housing price for the last 10 years. 
 
